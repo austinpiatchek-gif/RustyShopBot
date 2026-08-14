@@ -138,10 +138,13 @@ def find_price(card):
 
 
 # ============================================================
-# NORMALIZE IMAGE URL
+# NORMALIZE URL
 # ============================================================
 
-def normalize_url(url, base_url=None):
+def normalize_url(
+    url,
+    base_url=None
+):
 
     if not url:
         return None
@@ -164,7 +167,7 @@ def normalize_url(url, base_url=None):
 
 
 # ============================================================
-# FIND IMAGE FROM HTML
+# FIND IMAGE IN HTML
 # ============================================================
 
 def find_image_in_html(
@@ -173,7 +176,7 @@ def find_image_in_html(
 ):
 
     # --------------------------------------------------------
-    # 1. OpenGraph image
+    # OpenGraph
     # --------------------------------------------------------
 
     image = soup.find(
@@ -193,7 +196,7 @@ def find_image_in_html(
             )
 
     # --------------------------------------------------------
-    # 2. Twitter image
+    # Twitter
     # --------------------------------------------------------
 
     image = soup.find(
@@ -215,7 +218,7 @@ def find_image_in_html(
             )
 
     # --------------------------------------------------------
-    # 3. Images with useful data attributes
+    # Normal images
     # --------------------------------------------------------
 
     for image in soup.find_all("img"):
@@ -327,6 +330,17 @@ async def find_items(html):
 
     headings = soup.find_all("h3")
 
+    # --------------------------------------------------------
+    # These are NOT shop items.
+    # --------------------------------------------------------
+
+    ignored_names = {
+        "latest",
+        "usd",
+        "rust item store",
+        "visit the rust wiki",
+    }
+
     for heading in headings:
 
         name = clean_text(
@@ -339,16 +353,20 @@ async def find_items(html):
         if not name:
             continue
 
-        # Ignore headings that obviously aren't items.
-        if name.lower() in {
-            "latest",
-            "usd",
-            "rust item store"
-        }:
+        # ----------------------------------------------------
+        # IGNORE NON-ITEM HEADINGS
+        # ----------------------------------------------------
+
+        if name.lower() in ignored_names:
+
+            print(
+                f"Ignoring non-item heading: {name}"
+            )
+
             continue
 
         # ----------------------------------------------------
-        # FIND CARD
+        # FIND ITEM CARD
         # ----------------------------------------------------
 
         card = heading
@@ -450,7 +468,7 @@ async def find_items(html):
                     break
 
         # ----------------------------------------------------
-        # ALSO CHECK SOURCESET
+        # CHECK SRCSET
         # ----------------------------------------------------
 
         if not image_url and image:
@@ -462,7 +480,8 @@ async def find_items(html):
             if srcset:
 
                 first_image = (
-                    srcset.split(",")[0]
+                    srcset
+                    .split(",")[0]
                     .strip()
                     .split(" ")[0]
                 )
@@ -493,8 +512,7 @@ async def find_items(html):
             }
         )
 
-    # Current weekly shop has 10 items.
-    return items[:10]
+    return items
 
 
 # ============================================================
@@ -624,18 +642,12 @@ async def post_shop(
             color=0xE67E22
         )
 
-        # ----------------------------------------------------
-        # CLICKABLE RUSTHELP LINK
-        # ----------------------------------------------------
-
+        # Clickable item link
         if item.get("url"):
 
             item_embed.url = item["url"]
 
-        # ----------------------------------------------------
-        # ITEM PICTURE
-        # ----------------------------------------------------
-
+        # Item image
         if item.get("image"):
 
             print(
@@ -756,14 +768,31 @@ async def on_ready():
             html
         )
 
-        if not items:
+        # ----------------------------------------------------
+        # IMPORTANT: MUST FIND ALL 10
+        # ----------------------------------------------------
+
+        if len(items) != 10:
+
+            print(
+                "SHOP ITEMS FOUND:"
+            )
+
+            for item in items:
+
+                print(
+                    f"- {item['name']}"
+                )
 
             raise RuntimeError(
-                "No shop items were found."
+                f"Expected 10 shop items, "
+                f"but only found {len(items)}. "
+                "Nothing will be posted."
             )
 
         print(
-            f"Found {len(items)} shop items."
+            f"Found exactly {len(items)} "
+            f"shop items."
         )
 
         # ----------------------------------------------------
