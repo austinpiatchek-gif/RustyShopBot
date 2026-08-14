@@ -21,6 +21,13 @@ STORE_URL = "https://rusthelp.com/store"
 
 TIMEZONE = ZoneInfo("America/Chicago")
 
+# ============================================================
+# DISCORD ROLE TO PING
+# ============================================================
+# Change "Rust" if your role has a different name.
+
+RUST_ROLE_NAME = "Rust"
+
 
 # ============================================================
 # DISCORD
@@ -28,7 +35,9 @@ TIMEZONE = ZoneInfo("America/Chicago")
 
 intents = discord.Intents.default()
 
-client = discord.Client(intents=intents)
+client = discord.Client(
+    intents=intents
+)
 
 
 # ============================================================
@@ -51,14 +60,18 @@ HEADERS = {
 
 async def get_store_page():
 
-    timeout = aiohttp.ClientTimeout(total=30)
+    timeout = aiohttp.ClientTimeout(
+        total=30
+    )
 
     async with aiohttp.ClientSession(
         timeout=timeout,
         headers=HEADERS
     ) as session:
 
-        async with session.get(STORE_URL) as response:
+        async with session.get(
+            STORE_URL
+        ) as response:
 
             response.raise_for_status()
 
@@ -175,10 +188,7 @@ def find_image_in_html(
     base_url=None
 ):
 
-    # --------------------------------------------------------
-    # OpenGraph
-    # --------------------------------------------------------
-
+    # OpenGraph image
     image = soup.find(
         "meta",
         property="og:image"
@@ -186,7 +196,9 @@ def find_image_in_html(
 
     if image:
 
-        content = image.get("content")
+        content = image.get(
+            "content"
+        )
 
         if content:
 
@@ -195,10 +207,7 @@ def find_image_in_html(
                 base_url
             )
 
-    # --------------------------------------------------------
-    # Twitter
-    # --------------------------------------------------------
-
+    # Twitter image
     image = soup.find(
         "meta",
         attrs={
@@ -208,7 +217,9 @@ def find_image_in_html(
 
     if image:
 
-        content = image.get("content")
+        content = image.get(
+            "content"
+        )
 
         if content:
 
@@ -217,10 +228,7 @@ def find_image_in_html(
                 base_url
             )
 
-    # --------------------------------------------------------
     # Normal images
-    # --------------------------------------------------------
-
     for image in soup.find_all("img"):
 
         possible_urls = [
@@ -268,7 +276,8 @@ async def get_item_image(
     try:
 
         print(
-            f"Getting image from item page: {item_url}"
+            f"Getting image from item page: "
+            f"{item_url}"
         )
 
         async with session.get(
@@ -330,10 +339,7 @@ async def find_items(html):
 
     headings = soup.find_all("h3")
 
-    # --------------------------------------------------------
     # These are NOT shop items.
-    # --------------------------------------------------------
-
     ignored_names = {
         "latest",
         "usd",
@@ -353,14 +359,12 @@ async def find_items(html):
         if not name:
             continue
 
-        # ----------------------------------------------------
-        # IGNORE NON-ITEM HEADINGS
-        # ----------------------------------------------------
-
+        # Ignore non-item headings
         if name.lower() in ignored_names:
 
             print(
-                f"Ignoring non-item heading: {name}"
+                f"Ignoring non-item heading: "
+                f"{name}"
             )
 
             continue
@@ -584,6 +588,31 @@ def format_price(price):
 
 
 # ============================================================
+# FIND RUST ROLE
+# ============================================================
+
+def find_rust_role(channel):
+
+    guild = getattr(
+        channel,
+        "guild",
+        None
+    )
+
+    if guild is None:
+
+        return None
+
+    for role in guild.roles:
+
+        if role.name.lower() == RUST_ROLE_NAME.lower():
+
+            return role
+
+    return None
+
+
+# ============================================================
 # POST SHOP
 # ============================================================
 
@@ -598,35 +627,50 @@ async def post_shop(
     )
 
     # --------------------------------------------------------
-    # HEADER
+    # FIND RUST ROLE
     # --------------------------------------------------------
 
-    embed = discord.Embed(
-        title=(
-            f"🛒 RUST ITEM SHOP — "
-            f"{date_text}"
-        ),
-        description=(
-            "🔥 **New weekly Rust Item Shop!**\n\n"
-            f"**{len(items)} items available**"
-        ),
-        color=0xE67E22
+    rust_role = find_rust_role(
+        channel
     )
 
-    embed.set_footer(
-        text=(
-            "RustyShopBot • "
-            "Weekly Rust Item Shop"
+    if rust_role:
+
+        role_mention = rust_role.mention
+
+        print(
+            f"Rust role found: "
+            f"{rust_role.name}"
         )
-    )
 
-    await channel.send(
-        embed=embed
+    else:
+
+        role_mention = ""
+
+        print(
+            f"⚠️ Could not find role named "
+            f"'{RUST_ROLE_NAME}'"
+        )
+
+    # --------------------------------------------------------
+    # MESSAGE TEXT
+    # --------------------------------------------------------
+
+    message_text = (
+        f"{role_mention}\n"
+        f"🛒 **RUST ITEM SHOP — "
+        f"{date_text}**\n\n"
+        f"🔥 **New weekly Rust Item Shop!**\n"
+        f"**{len(items)} items available**"
     )
 
     # --------------------------------------------------------
-    # ITEMS
+    # CREATE 10 ITEM EMBEDS
     # --------------------------------------------------------
+    # Discord allows up to 10 embeds in one message.
+    # This means all 10 item pictures can be in ONE message.
+
+    embeds = []
 
     for item in items:
 
@@ -642,16 +686,16 @@ async def post_shop(
             color=0xE67E22
         )
 
-        # Clickable item link
+        # Clickable RustHelp item page
         if item.get("url"):
 
             item_embed.url = item["url"]
 
-        # Item image
+        # Item picture
         if item.get("image"):
 
             print(
-                f"Posting image for "
+                f"Adding image for "
                 f"{item['name']}: "
                 f"{item['image']}"
             )
@@ -671,9 +715,23 @@ async def post_shop(
                 "⚠️ Image unavailable"
             )
 
-        await channel.send(
-            embed=item_embed
+        embeds.append(
+            item_embed
         )
+
+    # --------------------------------------------------------
+    # SEND EVERYTHING AS ONE MESSAGE
+    # --------------------------------------------------------
+
+    allowed_mentions = discord.AllowedMentions(
+        roles=True
+    )
+
+    await channel.send(
+        content=message_text,
+        embeds=embeds,
+        allowed_mentions=allowed_mentions
+    )
 
 
 # ============================================================
@@ -769,7 +827,7 @@ async def on_ready():
         )
 
         # ----------------------------------------------------
-        # IMPORTANT: MUST FIND ALL 10
+        # MUST FIND ALL 10
         # ----------------------------------------------------
 
         if len(items) != 10:
