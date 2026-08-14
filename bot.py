@@ -6,6 +6,7 @@ import discord
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 
 # ============================================================
@@ -31,25 +32,30 @@ client = discord.Client(intents=intents)
 
 
 # ============================================================
+# HTTP HEADERS
+# ============================================================
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/151.0 Safari/537.36"
+    )
+}
+
+
+# ============================================================
 # GET RUST SHOP PAGE
 # ============================================================
 
 async def get_store_page():
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/151.0 Safari/537.36"
-        )
-    }
-
     timeout = aiohttp.ClientTimeout(total=30)
 
     async with aiohttp.ClientSession(
         timeout=timeout,
-        headers=headers
+        headers=HEADERS
     ) as session:
 
         async with session.get(STORE_URL) as response:
@@ -68,7 +74,11 @@ def clean_text(text):
     if not text:
         return ""
 
-    return re.sub(r"\s+", " ", text).strip()
+    return re.sub(
+        r"\s+",
+        " ",
+        text
+    ).strip()
 
 
 # ============================================================
@@ -77,7 +87,10 @@ def clean_text(text):
 
 def find_shop_date(soup):
 
-    text = soup.get_text(" ", strip=True)
+    text = soup.get_text(
+        " ",
+        strip=True
+    )
 
     match = re.search(
         r"Started on\s+(\d{2}/\d{2}/\d{4})",
@@ -106,12 +119,12 @@ def find_shop_date(soup):
 
 def find_price(card):
 
-    text = clean_text(card.get_text(" ", strip=True))
-
-    # Find prices such as:
-    # $1.49
-    # $2.99
-    # $3.99
+    text = clean_text(
+        card.get_text(
+            " ",
+            strip=True
+        )
+    )
 
     prices = re.findall(
         r"\$(\d+\.\d{2})",
@@ -121,20 +134,139 @@ def find_price(card):
     if not prices:
         return None
 
-    # The first price is the Rust Store price.
     return float(prices[0])
 
 
 # ============================================================
-# IMAGE
+# NORMALIZE IMAGE URL
 # ============================================================
 
-async def get_item_image(session, item_url):
+def normalize_url(url, base_url=None):
+
+    if not url:
+        return None
+
+    url = url.strip()
+
+    if url.startswith("data:"):
+        return None
+
+    if url.startswith("//"):
+        return "https:" + url
+
+    if base_url:
+        return urljoin(
+            base_url,
+            url
+        )
+
+    return url
+
+
+# ============================================================
+# FIND IMAGE FROM HTML
+# ============================================================
+
+def find_image_in_html(
+    soup,
+    base_url=None
+):
+
+    # --------------------------------------------------------
+    # 1. OpenGraph image
+    # --------------------------------------------------------
+
+    image = soup.find(
+        "meta",
+        property="og:image"
+    )
+
+    if image:
+
+        content = image.get("content")
+
+        if content:
+
+            return normalize_url(
+                content,
+                base_url
+            )
+
+    # --------------------------------------------------------
+    # 2. Twitter image
+    # --------------------------------------------------------
+
+    image = soup.find(
+        "meta",
+        attrs={
+            "name": "twitter:image"
+        }
+    )
+
+    if image:
+
+        content = image.get("content")
+
+        if content:
+
+            return normalize_url(
+                content,
+                base_url
+            )
+
+    # --------------------------------------------------------
+    # 3. Images with useful data attributes
+    # --------------------------------------------------------
+
+    for image in soup.find_all("img"):
+
+        possible_urls = [
+
+            image.get("src"),
+
+            image.get("data-src"),
+
+            image.get("data-lazy-src"),
+
+            image.get("data-original"),
+
+            image.get("data-image"),
+
+            image.get("data-url"),
+
+        ]
+
+        for possible_url in possible_urls:
+
+            normalized = normalize_url(
+                possible_url,
+                base_url
+            )
+
+            if normalized:
+
+                return normalized
+
+    return None
+
+
+# ============================================================
+# GET ITEM IMAGE
+# ============================================================
+
+async def get_item_image(
+    session,
+    item_url
+):
 
     if not item_url:
         return None
 
     try:
+
+        print(
+            f"Getting image from item page: {item_url}"
+        )
 
         async with session.get(
             item_url,
@@ -142,6 +274,12 @@ async def get_item_image(session, item_url):
         ) as response:
 
             if response.status != 200:
+
+                print(
+                    f"Image page returned HTTP "
+                    f"{response.status}"
+                )
+
                 return None
 
             html = await response.text()
@@ -151,34 +289,24 @@ async def get_item_image(session, item_url):
             "html.parser"
         )
 
-        # Try OpenGraph image first.
-        image = soup.find(
-            "meta",
-            property="og:image"
+        image_url = find_image_in_html(
+            soup,
+            item_url
         )
 
-        if image and image.get("content"):
-            return image["content"]
+        if image_url:
 
-        # Try Twitter image.
-        image = soup.find(
-            "meta",
-            attrs={"name": "twitter:image"}
-        )
+            print(
+                f"Image found: {image_url}"
+            )
 
-        if image and image.get("content"):
-            return image["content"]
-
-        # Try normal images.
-        image = soup.find("img")
-
-        if image and image.get("src"):
-            return image["src"]
+            return image_url
 
     except Exception as e:
 
         print(
-            f"Could not get image for {item_url}: {e}"
+            f"Could not get image for "
+            f"{item_url}: {e}"
         )
 
     return None
@@ -197,20 +325,21 @@ async def find_items(html):
 
     items = []
 
-    # RustHelp currently displays each store item
-    # as an H3 heading.
     headings = soup.find_all("h3")
 
     for heading in headings:
 
         name = clean_text(
-            heading.get_text(" ", strip=True)
+            heading.get_text(
+                " ",
+                strip=True
+            )
         )
 
         if not name:
             continue
 
-        # Ignore headings that obviously aren't store items.
+        # Ignore headings that obviously aren't items.
         if name.lower() in {
             "latest",
             "usd",
@@ -218,7 +347,10 @@ async def find_items(html):
         }:
             continue
 
-        # Walk upward until we find a useful card/container.
+        # ----------------------------------------------------
+        # FIND CARD
+        # ----------------------------------------------------
+
         card = heading
 
         for _ in range(6):
@@ -229,10 +361,12 @@ async def find_items(html):
             card = card.parent
 
             card_text = clean_text(
-                card.get_text(" ", strip=True)
+                card.get_text(
+                    " ",
+                    strip=True
+                )
             )
 
-            # A store item card should contain a dollar price.
             if re.search(
                 r"\$\d+\.\d{2}",
                 card_text
@@ -240,57 +374,114 @@ async def find_items(html):
 
                 break
 
-        price = find_price(card)
+        price = find_price(
+            card
+        )
 
         if price is None:
             continue
 
-        # Try to find the item's RustHelp URL.
+        # ----------------------------------------------------
+        # FIND ITEM URL
+        # ----------------------------------------------------
+
         link = None
 
-        # First check the heading itself.
         heading_link = heading.find("a")
 
-        if heading_link and heading_link.get("href"):
-            link = heading_link["href"]
+        if heading_link:
 
-        # Otherwise search the card.
+            link = heading_link.get(
+                "href"
+            )
+
         if not link:
 
             card_link = card.find("a")
 
-            if card_link and card_link.get("href"):
-                link = card_link["href"]
+            if card_link:
 
-        if link:
+                link = card_link.get(
+                    "href"
+                )
 
-            if link.startswith("/"):
-                link = "https://rusthelp.com" + link
+        link = normalize_url(
+            link,
+            "https://rusthelp.com"
+        )
 
-            elif link.startswith("//"):
-                link = "https:" + link
+        # ----------------------------------------------------
+        # FIND IMAGE DIRECTLY FROM CARD
+        # ----------------------------------------------------
 
-        # Try image directly from the card first.
         image_url = None
 
         image = card.find("img")
 
         if image:
 
-            image_url = (
-                image.get("src")
-                or image.get("data-src")
-                or image.get("data-lazy-src")
+            possible_images = [
+
+                image.get("src"),
+
+                image.get("data-src"),
+
+                image.get("data-lazy-src"),
+
+                image.get("data-original"),
+
+                image.get("data-image"),
+
+                image.get("data-url"),
+
+            ]
+
+            for possible_image in possible_images:
+
+                normalized = normalize_url(
+                    possible_image,
+                    STORE_URL
+                )
+
+                if normalized:
+
+                    image_url = normalized
+
+                    break
+
+        # ----------------------------------------------------
+        # ALSO CHECK SOURCESET
+        # ----------------------------------------------------
+
+        if not image_url and image:
+
+            srcset = image.get(
+                "srcset"
             )
 
-        if image_url and image_url.startswith("//"):
-            image_url = "https:" + image_url
+            if srcset:
 
-        # Avoid duplicate items.
+                first_image = (
+                    srcset.split(",")[0]
+                    .strip()
+                    .split(" ")[0]
+                )
+
+                image_url = normalize_url(
+                    first_image,
+                    STORE_URL
+                )
+
+        # ----------------------------------------------------
+        # AVOID DUPLICATES
+        # ----------------------------------------------------
+
         if any(
-            item["name"].lower() == name.lower()
+            item["name"].lower()
+            == name.lower()
             for item in items
         ):
+
             continue
 
         items.append(
@@ -302,9 +493,67 @@ async def find_items(html):
             }
         )
 
-    # Keep only actual store items.
-    # The current weekly Rust store has 10 items.
+    # Current weekly shop has 10 items.
     return items[:10]
+
+
+# ============================================================
+# FILL IN MISSING IMAGES
+# ============================================================
+
+async def add_missing_images(items):
+
+    timeout = aiohttp.ClientTimeout(
+        total=30
+    )
+
+    async with aiohttp.ClientSession(
+        timeout=timeout,
+        headers=HEADERS
+    ) as session:
+
+        for item in items:
+
+            if item.get("image"):
+
+                print(
+                    f"Image already found for "
+                    f"{item['name']}"
+                )
+
+                continue
+
+            print(
+                f"No image found on shop card for "
+                f"{item['name']}"
+            )
+
+            if not item.get("url"):
+
+                print(
+                    f"No item URL available for "
+                    f"{item['name']}"
+                )
+
+                continue
+
+            image_url = await get_item_image(
+                session,
+                item["url"]
+            )
+
+            if image_url:
+
+                item["image"] = image_url
+
+            else:
+
+                print(
+                    f"❌ IMAGE NOT FOUND: "
+                    f"{item['name']}"
+                )
+
+    return items
 
 
 # ============================================================
@@ -330,8 +579,15 @@ async def post_shop(
         "%B %d, %Y"
     )
 
+    # --------------------------------------------------------
+    # HEADER
+    # --------------------------------------------------------
+
     embed = discord.Embed(
-        title=f"🛒 RUST ITEM SHOP — {date_text}",
+        title=(
+            f"🛒 RUST ITEM SHOP — "
+            f"{date_text}"
+        ),
         description=(
             "🔥 **New weekly Rust Item Shop!**\n\n"
             f"**{len(items)} items available**"
@@ -340,15 +596,20 @@ async def post_shop(
     )
 
     embed.set_footer(
-        text="RustyShopBot • Weekly Rust Item Shop"
+        text=(
+            "RustyShopBot • "
+            "Weekly Rust Item Shop"
+        )
     )
 
     await channel.send(
         embed=embed
     )
 
-    # Post each item individually.
-    # This keeps the name/price together with the image.
+    # --------------------------------------------------------
+    # ITEMS
+    # --------------------------------------------------------
+
     for item in items:
 
         price_text = format_price(
@@ -356,18 +617,46 @@ async def post_shop(
         )
 
         item_embed = discord.Embed(
-            title=f"{item['name']} — {price_text}",
+            title=(
+                f"{item['name']} — "
+                f"{price_text}"
+            ),
             color=0xE67E22
         )
+
+        # ----------------------------------------------------
+        # CLICKABLE RUSTHELP LINK
+        # ----------------------------------------------------
 
         if item.get("url"):
 
             item_embed.url = item["url"]
 
+        # ----------------------------------------------------
+        # ITEM PICTURE
+        # ----------------------------------------------------
+
         if item.get("image"):
+
+            print(
+                f"Posting image for "
+                f"{item['name']}: "
+                f"{item['image']}"
+            )
 
             item_embed.set_image(
                 url=item["image"]
+            )
+
+        else:
+
+            print(
+                f"⚠️ NO IMAGE FOR "
+                f"{item['name']}"
+            )
+
+            item_embed.description = (
+                "⚠️ Image unavailable"
             )
 
         await channel.send(
@@ -433,7 +722,8 @@ async def on_ready():
         if not shop_date:
 
             raise RuntimeError(
-                "Could not find the Rust shop start date."
+                "Could not find the Rust shop "
+                "start date."
             )
 
         print(
@@ -441,12 +731,7 @@ async def on_ready():
         )
 
         # ----------------------------------------------------
-        # IMPORTANT SAFETY CHECK
-        # ----------------------------------------------------
-        # We only post today's Thursday shop.
-        #
-        # This prevents the bot from accidentally posting
-        # an old July/August rotation again.
+        # SAFETY CHECK
         # ----------------------------------------------------
 
         if shop_date != now.date():
@@ -481,12 +766,40 @@ async def on_ready():
             f"Found {len(items)} shop items."
         )
 
+        # ----------------------------------------------------
+        # FIND MISSING IMAGES
+        # ----------------------------------------------------
+
+        print(
+            "Checking item images..."
+        )
+
+        items = await add_missing_images(
+            items
+        )
+
+        # ----------------------------------------------------
+        # PRINT FINAL SHOP
+        # ----------------------------------------------------
+
+        print(
+            "FINAL SHOP:"
+        )
+
         for item in items:
+
+            image_status = (
+                "IMAGE FOUND"
+                if item.get("image")
+                else "NO IMAGE"
+            )
 
             print(
                 f"{item['name']} "
                 f"-> "
-                f"{format_price(item['price'])}"
+                f"{format_price(item['price'])} "
+                f"-> "
+                f"{image_status}"
             )
 
         # ----------------------------------------------------
@@ -535,5 +848,9 @@ async def on_ready():
 
         await client.close()
 
+
+# ============================================================
+# START BOT
+# ============================================================
 
 client.run(TOKEN)
