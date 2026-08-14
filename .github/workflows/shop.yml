@@ -1,0 +1,27 @@
+name: Rust Item Shop
+
+on:
+  schedule:
+    - cron: "15 18 * * 4"
+  workflow_dispatch:
+
+jobs:
+  shop:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Post Rust Item Shop
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+        run: python bot.py
